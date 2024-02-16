@@ -8,13 +8,10 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js';
 import {
   getFirestore,
-  collection,
   doc,
   setDoc,
-  addDoc,
+  updateDoc,
   getDoc,
-  Timestamp,
-  serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -30,49 +27,28 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth();
 const db = getFirestore(app);
 
-const authRoutes = ['/auth/login.html', '/auth/register.html'];
+const authRoutes = ['/auth/login.html', '/auth/register.html', '/'];
 
 if (typeof document !== 'undefined') {
   document.addEventListener('DOMContentLoaded', () => {
     handleRouteProtection();
 
     const loginForm = document.querySelector('#form-login');
-    loginForm?.addEventListener('submit', e => {
-      e.preventDefault();
-      handleLogin(e.target);
-    });
+    loginForm?.addEventListener('submit', handleLogin);
 
     const registerForm = document.querySelector('#form-register');
-    registerForm?.addEventListener('submit', e => {
-      e.preventDefault();
-      handleRegister(e.target);
-    });
+    registerForm?.addEventListener('submit', handleRegister);
 
     const logoutBtn = document.querySelector('#logout');
-    logoutBtn?.addEventListener('click', () => {
-      handleLogout();
-    });
+    logoutBtn?.addEventListener('click', handleLogout);
 
     const userShowSessions = document.querySelector('#user-show-sessions');
     const userAddSession = document.querySelector('#user-add-session');
-
-    const userSessionsList = document.querySelector('#user-sessions-list');
     const userSessionForm = document.querySelector('#user-session-form');
 
-    userShowSessions?.addEventListener('click', () => {
-      userSessionsList?.classList.remove('hidden');
-      userSessionForm?.classList.add('hidden');
-    });
-
-    userAddSession?.addEventListener('click', () => {
-      userSessionForm?.classList.remove('hidden');
-      userSessionsList?.classList.add('hidden');
-    });
-
-    userSessionForm?.addEventListener('submit', e => {
-      e.preventDefault();
-      handleUserAddSession(e.target);
-    });
+    userShowSessions?.addEventListener('click', activateShowSessions);
+    userAddSession?.addEventListener('click', activateAddSession);
+    userSessionForm?.addEventListener('submit', handleUserAddSession);
   });
 }
 
@@ -83,7 +59,6 @@ function handleRouteProtection() {
 
   onAuthStateChanged(auth, user => {
     if (user) {
-      // const uid = user.uid;
       const displayName = document.querySelector('#displayName');
       if (displayName) {
         displayName.textContent = user.email;
@@ -92,15 +67,19 @@ function handleRouteProtection() {
       if (authRoutes.includes(pathname)) {
         window.location.href = `${origin}/user`;
       }
-    } else {
-      if (!authRoutes.includes(pathname)) {
-        window.location.href = `${origin}/auth/login.html`;
+
+      if (pathname === '/user/') {
+        activateShowSessions();
       }
+    } else if (!authRoutes.includes(pathname)) {
+      window.location.href = `${origin}/auth/login.html`;
     }
   });
 }
 
-async function handleLogin(form) {
+async function handleLogin(e) {
+  e.preventDefault();
+  const form = e.target;
   const email = form.email.value || '';
   const password = form.password.value || '';
 
@@ -114,7 +93,6 @@ async function handleLogin(form) {
     submitBtn.disabled = true;
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const { user } = userCredential;
-    console.log(user);
   } catch (error) {
     errorMsg.classList.remove('hidden');
     errorMsg.textContent = error.message;
@@ -123,7 +101,9 @@ async function handleLogin(form) {
   }
 }
 
-async function handleRegister(form) {
+async function handleRegister(e) {
+  e.preventDefault();
+  const form = e.target;
   const email = form.email.value || '';
   const password = form.password.value || '';
 
@@ -137,7 +117,6 @@ async function handleRegister(form) {
     submitBtn.disabled = true;
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const { user } = userCredential;
-    console.log(user);
   } catch (error) {
     errorMsg.classList.remove('hidden');
     errorMsg.textContent = error.message;
@@ -154,39 +133,110 @@ async function handleLogout() {
   }
 }
 
-async function handleUserAddSession(form) {
+async function handleUserAddSession(e) {
+  e.preventDefault();
+  const form = e.target;
   const userId = auth.currentUser?.uid;
-  const sessionName = form.sessionName;
+  const sessionName = form.sessionName?.value;
 
-  const usersColRef = collection(db, 'users');
-  const userDocRef = doc(usersColRef, userId);
+  const userDocRef = doc(db, 'users', userId);
   const userDocSnap = await getDoc(userDocRef);
 
-  console.log(userDocSnap.exists());
+  const sessionData = {
+    name: sessionName || '',
+    created_at: Date.now(),
+    finished_at: null,
+  };
 
-  if (!userDocSnap.exists()) {
-    await setDoc(userDocRef, {});
+  if (userDocSnap.exists()) {
+    const oldSessions = userDocSnap.data()?.sessions || [];
+    await updateDoc(userDocRef, {
+      sessions: [...oldSessions, sessionData],
+    });
+  } else {
+    await setDoc(userDocRef, {
+      user: {
+        id: userId || '',
+        email: auth.currentUser?.email || '',
+      },
+      sessions: [sessionData],
+    });
   }
 
-  const sessionsColRef = collection(db, `users/${userId}/sessions`);
-  console.log(sessionsColRef);
-  await addDoc(sessionsColRef, {
-    name: sessionName,
-    created_at: serverTimestamp(),
-    finished_at: null,
-  });
+  form.reset();
+  // redirect to sessions
+  activateShowSessions();
+}
 
-  return;
+function activateShowSessions() {
+  const userSessionsList = document.querySelector('#user-sessions-list');
+  const userSessionForm = document.querySelector('#user-session-form');
 
-  try {
-    const sessionData = {
-      name: sessionName,
-      // created_at: serverTimestamp(),
-      finished_at: null,
-    };
+  userSessionsList?.classList.remove('hidden');
+  userSessionForm?.classList.add('hidden');
 
-    await addDoc(sessionsRef, sessionData);
-  } catch (e) {
-    console.error('Error adding document: ', e);
+  handleSessionsList();
+}
+
+function activateAddSession() {
+  const userSessionsList = document.querySelector('#user-sessions-list');
+  const userSessionForm = document.querySelector('#user-session-form');
+
+  userSessionsList?.classList.add('hidden');
+  userSessionForm?.classList.remove('hidden');
+}
+
+async function handleSessionsList() {
+  const userId = auth.currentUser?.uid;
+  const listMsg = document.querySelector('[data-user-sessions-msg]');
+  const listItems = document.querySelector('[data-user-sessions-items]');
+  listItems.innerHTML = '';
+
+  const userDocRef = doc(db, 'users', userId);
+  const userDocSnap = await getDoc(userDocRef);
+
+  if (userDocSnap.exists()) {
+    const listData = userDocSnap.data().sessions || [];
+
+    if (listData.length) {
+      listMsg.classList.add('hidden');
+      listItems.classList.remove('hidden');
+
+      listData.forEach((obj, index) => {
+        const listItem = `
+          <tr>
+            <td class="py-2">${index}</td>
+            <td class="py-2">${obj.name}</td>
+            <td class="py-2">${dateFns.format(new Date(obj.created_at), 'MMM, d YYYY  h:m:s a')}</td>
+            <td class="py-2">${
+              obj.finished_at ? dateFns.format(new Date(obj.finished_at), 'MMM, d YYYY  h:m:s a') : '----'
+            }</td>
+            <td class="py-2">${
+              // dateFns.formatDistance(obj.finished_at, obj.created_at)
+              obj.finished_at ? 0 : '----'
+            }</td>
+            <td class="py-2">
+            ${
+              !obj.finished_at
+                ? `<button class="px-3 py-2 text-white rounded bg-blue-600 hover:bg-blue-800 transition-colors" data-session-id="${
+                    obj.id || index
+                  }">Finish</button>`
+                : `<span class="py-1 px-2 font-semibold rounded-full bg-gray-200 text-xs">finished</span>`
+            }
+              
+            </td>
+          </tr>
+        `;
+
+        listItems.insertAdjacentHTML('beforeend', listItem);
+      });
+    } else {
+      listMsg.classList.remove('hidden');
+      listItems.classList.add('hidden');
+    }
+  } else {
+    // show empty msg
+    listMsg.classList.remove('hidden');
+    listItems.classList.add('hidden');
   }
 }
